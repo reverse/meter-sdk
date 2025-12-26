@@ -22,8 +22,8 @@ pip install -e .
 Or install from source:
 
 ```bash
-git clone <repository>
-cd sdk
+git clone https://github.com/reverse/meter-sdk
+cd meter-sdk
 pip install -e .
 ```
 
