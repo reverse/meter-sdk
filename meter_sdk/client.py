@@ -143,15 +143,45 @@ class MeterClient:
     ) -> Dict[str, Any]:
         """
         Create a new scrape job.
-        
+
         Args:
             strategy_id: Strategy UUID to use
             url: URL to scrape
-        
+
         Returns:
             Job details with status 'pending'
         """
         return self._post("/api/jobs", json={
+            "strategy_id": strategy_id,
+            "url": url
+        })
+
+    def execute_job(
+        self,
+        strategy_id: str,
+        url: str
+    ) -> Dict[str, Any]:
+        """
+        Create and execute a scrape job synchronously.
+
+        This endpoint creates a job, waits for completion, and returns results.
+        Unlike create_job which returns immediately, this waits for the job to finish.
+        Useful for synchronous workflows where you want immediate results.
+
+        Args:
+            strategy_id: Strategy UUID to use
+            url: URL to scrape
+
+        Returns:
+            Completed job with results
+
+        Raises:
+            MeterError: If job fails or times out
+
+        Note:
+            This endpoint has a timeout of 3600 seconds (1 hour)
+        """
+        return self._post("/api/jobs/execute", json={
             "strategy_id": strategy_id,
             "url": url
         })
@@ -228,25 +258,34 @@ class MeterClient:
     def create_schedule(
         self,
         strategy_id: str,
-        url: str,
+        url: Optional[str] = None,
+        urls: Optional[List[str]] = None,
         interval_seconds: Optional[int] = None,
         cron_expression: Optional[str] = None,
         webhook_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Create a recurring scrape schedule.
-        
+
         Args:
             strategy_id: Strategy UUID
-            url: URL to scrape
+            url: Single URL to scrape (use url OR urls, not both)
+            urls: List of URLs to scrape (use url OR urls, not both)
             interval_seconds: Run every N seconds (or use cron_expression)
             cron_expression: Cron expression (e.g., "0 9 * * *")
             webhook_url: Optional webhook URL to receive scrape results
-        
+
         Returns:
             Schedule details
+
+        Note:
+            You must provide either url or urls, but not both.
         """
-        json_data = {"strategy_id": strategy_id, "url": url}
+        json_data = {"strategy_id": strategy_id}
+        if url:
+            json_data["url"] = url
+        if urls:
+            json_data["urls"] = urls
         if interval_seconds:
             json_data["interval_seconds"] = interval_seconds
         if cron_expression:
@@ -263,26 +302,37 @@ class MeterClient:
         self,
         schedule_id: str,
         enabled: Optional[bool] = None,
+        url: Optional[str] = None,
+        urls: Optional[List[str]] = None,
         interval_seconds: Optional[int] = None,
         cron_expression: Optional[str] = None,
         webhook_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Update a schedule.
-        
+
         Args:
             schedule_id: Schedule UUID
             enabled: Enable or disable the schedule
+            url: Update single URL to scrape
+            urls: Update to multiple URLs to scrape
             interval_seconds: Update interval in seconds
             cron_expression: Update cron expression
             webhook_url: Update webhook URL for scrape results
-        
+
         Returns:
             Updated schedule details
+
+        Note:
+            Setting url will clear urls, and vice versa.
         """
         json_data = {}
         if enabled is not None:
             json_data["enabled"] = enabled
+        if url is not None:
+            json_data["url"] = url
+        if urls is not None:
+            json_data["urls"] = urls
         if interval_seconds is not None:
             json_data["interval_seconds"] = interval_seconds
         if cron_expression is not None:
@@ -294,4 +344,35 @@ class MeterClient:
     def delete_schedule(self, schedule_id: str) -> Dict[str, Any]:
         """Delete a schedule"""
         return self._delete(f"/api/schedules/{schedule_id}")
+
+    def get_schedule_changes(
+        self,
+        schedule_id: str,
+        mark_seen: bool = True,
+        filter: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get all unseen changes for a schedule (pull-based change detection).
+
+        Returns jobs where content has changed compared to previous run.
+        By default, marks returned changes as seen (like reading an email).
+
+        Args:
+            schedule_id: Schedule UUID
+            mark_seen: Whether to mark changes as seen (default: True)
+            filter: Lucene-style keyword filter for results. Filters individual
+                items within each job's results array. Examples:
+                - "+trump +tariff" - items with both keywords (AND)
+                - "trump elon" - items with either keyword (OR)
+                - "+trump -biden" - items with trump but not biden
+                - '"elon musk"' - items with exact phrase
+
+        Returns:
+            Response with changed jobs, count, and whether they were marked as seen.
+            If filter is applied, only matching result items are included.
+        """
+        params = {"mark_seen": mark_seen}
+        if filter:
+            params["filter"] = filter
+        return self._get(f"/api/schedules/{schedule_id}/changes", params=params)
 
