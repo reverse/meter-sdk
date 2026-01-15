@@ -167,7 +167,7 @@ Refinement is fast and cost-effective because it uses cached HTML from the initi
 strategies = client.list_strategies(limit=20, offset=0)
 
 for strategy in strategies:
-    print(f"{strategy['name']}: {strategy['id']}")
+    print(f"{strategy['name']}: {strategy['strategy_id']}")
     print(f"  URL: {strategy['url']}")
     print(f"  Created: {strategy['created_at']}")
 ```
@@ -310,7 +310,7 @@ schedule = client.create_schedule(
     interval_seconds=3600
 )
 
-print(f"Schedule ID: {schedule['id']}")
+print(f"Schedule ID: {schedule['schedule_id']}")
 print(f"Next run: {schedule['next_run_at']}")
 ```
 
@@ -354,7 +354,7 @@ schedule = client.create_schedule(
 schedules = client.list_schedules()
 
 for schedule in schedules:
-    print(f"{schedule['id']}: {schedule['schedule_type']}")
+    print(f"{schedule['schedule_id']}: {schedule['schedule_type']}")
     print(f"  Enabled: {schedule['enabled']}")
     print(f"  Next run: {schedule['next_run_at']}")
 ```
@@ -423,7 +423,7 @@ schedule = client.create_schedule(
     cron_expression="0 9 * * *"  # Daily at 9 AM
 )
 
-print(f"Monitoring schedule created: {schedule['id']}")
+print(f"Monitoring schedule created: {schedule['schedule_id']}")
 
 # Step 4: Check for changes later
 history = client.get_strategy_history(strategy_id)
