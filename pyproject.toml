@@ -27,6 +27,6 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://api.meter.sh"
-Documentation = "https://api.meter.sh/docs"
+Homepage = "https://meter.sh"
+Documentation = "https://docs.meter.sh/"
 
