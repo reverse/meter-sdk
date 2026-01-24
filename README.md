@@ -20,7 +20,7 @@ Python SDK for the [Meter Scraper API](https://api.meter.sh) - a powerful web sc
 ## Installation
 
 ```bash
-pip install -e .
+pip install meter-sdk
 ```
 
 Or install from source:
