@@ -80,23 +80,30 @@ class MeterClient:
         self,
         url: str,
         description: str,
-        name: str
+        name: str,
+        force_api: bool = False
     ) -> Dict[str, Any]:
         """
         Generate a new extraction strategy.
-        
+
         Args:
             url: URL to scrape
             description: What to extract
             name: Strategy name
-        
+            force_api: Force API-based capture instead of CSS extraction.
+                When True, Meter will attempt to identify and capture
+                underlying API calls rather than using CSS selectors.
+
         Returns:
-            Strategy details with preview data
+            Strategy details with preview data. For API-based strategies,
+            response includes scraper_type ('api' or 'css') and
+            api_parameters (available URL parameters for API scrapers).
         """
         return self._post("/api/strategies/generate", json={
             "url": url,
             "description": description,
-            "name": name
+            "name": name,
+            "force_api": force_api
         })
     
     def refine_strategy(
@@ -139,27 +146,42 @@ class MeterClient:
     def create_job(
         self,
         strategy_id: str,
-        url: str
+        url: Optional[str] = None,
+        urls: Optional[List[str]] = None,
+        parameters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Create a new scrape job.
 
         Args:
             strategy_id: Strategy UUID to use
-            url: URL to scrape
+            url: Single URL to scrape (use url OR urls, not both)
+            urls: List of URLs to scrape as a batch (use url OR urls, not both)
+            parameters: Override API parameters for this job. Only applies to
+                API-based strategies. Keys are parameter names from the
+                strategy's api_parameters field.
 
         Returns:
-            Job details with status 'pending'
+            Job details with status 'pending'. For batch jobs (multiple urls),
+            returns batch_id for tracking progress.
+
+        Note:
+            You must provide either url or urls, but not both.
         """
-        return self._post("/api/jobs", json={
-            "strategy_id": strategy_id,
-            "url": url
-        })
+        json_data = {"strategy_id": strategy_id}
+        if url:
+            json_data["url"] = url
+        if urls:
+            json_data["urls"] = urls
+        if parameters:
+            json_data["parameters"] = parameters
+        return self._post("/api/jobs", json=json_data)
 
     def execute_job(
         self,
         strategy_id: str,
-        url: str
+        url: str,
+        parameters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Create and execute a scrape job synchronously.
@@ -171,6 +193,9 @@ class MeterClient:
         Args:
             strategy_id: Strategy UUID to use
             url: URL to scrape
+            parameters: Override API parameters for this job. Only applies to
+                API-based strategies. Keys are parameter names from the
+                strategy's api_parameters field.
 
         Returns:
             Completed job with results
@@ -181,10 +206,13 @@ class MeterClient:
         Note:
             This endpoint has a timeout of 3600 seconds (1 hour)
         """
-        return self._post("/api/jobs/execute", json={
+        json_data = {
             "strategy_id": strategy_id,
             "url": url
-        })
+        }
+        if parameters:
+            json_data["parameters"] = parameters
+        return self._post("/api/jobs/execute", json=json_data)
     
     def get_job(self, job_id: str) -> Dict[str, Any]:
         """Get job status and results"""
@@ -262,7 +290,8 @@ class MeterClient:
         urls: Optional[List[str]] = None,
         interval_seconds: Optional[int] = None,
         cron_expression: Optional[str] = None,
-        webhook_url: Optional[str] = None
+        webhook_url: Optional[str] = None,
+        parameters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Create a recurring scrape schedule.
@@ -274,6 +303,9 @@ class MeterClient:
             interval_seconds: Run every N seconds (or use cron_expression)
             cron_expression: Cron expression (e.g., "0 9 * * *")
             webhook_url: Optional webhook URL to receive scrape results
+            parameters: Default API parameter overrides for all scheduled runs.
+                Only applies to API-based strategies. Keys are parameter names
+                from the strategy's api_parameters field.
 
         Returns:
             Schedule details
@@ -292,6 +324,8 @@ class MeterClient:
             json_data["cron_expression"] = cron_expression
         if webhook_url:
             json_data["webhook_url"] = webhook_url
+        if parameters:
+            json_data["parameters"] = parameters
         return self._post("/api/schedules", json=json_data)
     
     def list_schedules(self) -> List[Dict[str, Any]]:
@@ -306,7 +340,8 @@ class MeterClient:
         urls: Optional[List[str]] = None,
         interval_seconds: Optional[int] = None,
         cron_expression: Optional[str] = None,
-        webhook_url: Optional[str] = None
+        webhook_url: Optional[str] = None,
+        parameters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Update a schedule.
@@ -319,6 +354,8 @@ class MeterClient:
             interval_seconds: Update interval in seconds
             cron_expression: Update cron expression
             webhook_url: Update webhook URL for scrape results
+            parameters: Update default API parameter overrides for scheduled runs.
+                Only applies to API-based strategies.
 
         Returns:
             Updated schedule details
@@ -339,6 +376,8 @@ class MeterClient:
             json_data["cron_expression"] = cron_expression
         if webhook_url is not None:
             json_data["webhook_url"] = webhook_url
+        if parameters is not None:
+            json_data["parameters"] = parameters
         return self._patch(f"/api/schedules/{schedule_id}", json=json_data)
     
     def delete_schedule(self, schedule_id: str) -> Dict[str, Any]:

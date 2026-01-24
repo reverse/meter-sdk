@@ -6,10 +6,14 @@ Python SDK for the [Meter Scraper API](https://api.meter.sh) - a powerful web sc
 
 - **Simple API**: Clean, Pythonic interface for all API operations
 - **LLM-Powered Strategies**: Generate extraction strategies using natural language descriptions
+- **API-Based Scraping**: Capture underlying APIs with `force_api` for dynamic sites
 - **Strategy Refinement**: Iteratively improve strategies with feedback
 - **Job Execution**: Run scrapes with saved strategies (no LLM costs on execution)
+- **API Parameters**: Override parameters at runtime for API-based strategies
+- **Batch Jobs**: Scrape multiple URLs in a single request
 - **Content Analysis**: Track changes with content hashing, structural signatures, and semantic similarity
 - **Scheduling**: Set up recurring scrapes with interval or cron expressions
+- **Keyword Filtering**: Filter change results with Lucene-style syntax
 - **Error Handling**: Comprehensive error handling with custom exceptions
 - **Type Hints**: Full type annotations for better IDE support
 
@@ -392,7 +396,45 @@ client.delete_schedule(schedule_id)
 
 ## Complete Workflow Examples
 
-### Example 1: E-commerce Product Monitoring
+### Example 1: API-Based Scraping with Parameters
+
+For sites that load data via JavaScript APIs, use `force_api=True` to capture the underlying API:
+
+```python
+from meter_sdk import MeterClient
+
+client = MeterClient(api_key="sk_live_...")
+
+# Generate strategy with API capture
+strategy = client.generate_strategy(
+    url="https://jobs.example.com/listings",
+    description="Extract job titles, companies, salaries, and locations",
+    name="Job Listings API",
+    force_api=True  # Force API-based capture
+)
+
+# Check the scraper type and available parameters
+print(f"Scraper type: {strategy['scraper_type']}")  # 'api' or 'css'
+if strategy.get('api_parameters'):
+    print(f"Available parameters: {strategy['api_parameters']}")
+    # e.g., {'page': 1, 'limit': 20, 'category': 'all', 'location': 'remote'}
+
+# Run job with custom parameters
+job = client.create_job(
+    strategy_id=strategy["strategy_id"],
+    url="https://jobs.example.com/api/listings",
+    parameters={
+        "category": "engineering",
+        "location": "remote",
+        "limit": 100
+    }
+)
+
+results = client.wait_for_job(job["job_id"])
+print(f"Found {results['item_count']} matching jobs")
+```
+
+### Example 2: E-commerce Product Monitoring
 
 ```python
 from meter_sdk import MeterClient
@@ -592,7 +634,7 @@ MeterClient(api_key: str, base_url: str = "https://api.meter.sh")
 
 #### Strategy Methods
 
-- `generate_strategy(url: str, description: str, name: str) -> Dict`
+- `generate_strategy(url: str, description: str, name: str, force_api: bool = False) -> Dict`
 - `refine_strategy(strategy_id: str, feedback: str) -> Dict`
 - `list_strategies(limit: int = 20, offset: int = 0) -> List[Dict]`
 - `get_strategy(strategy_id: str) -> Dict`
@@ -600,7 +642,8 @@ MeterClient(api_key: str, base_url: str = "https://api.meter.sh")
 
 #### Job Methods
 
-- `create_job(strategy_id: str, url: str) -> Dict`
+- `create_job(strategy_id: str, url: Optional[str] = None, urls: Optional[List[str]] = None, parameters: Optional[Dict] = None) -> Dict`
+- `execute_job(strategy_id: str, url: str, parameters: Optional[Dict] = None) -> Dict`
 - `get_job(job_id: str) -> Dict`
 - `list_jobs(strategy_id: Optional[str] = None, status: Optional[str] = None, limit: int = 20, offset: int = 0) -> List[Dict]`
 - `wait_for_job(job_id: str, poll_interval: float = 1.0, timeout: Optional[float] = None) -> Dict`
@@ -609,10 +652,11 @@ MeterClient(api_key: str, base_url: str = "https://api.meter.sh")
 
 #### Schedule Methods
 
-- `create_schedule(strategy_id: str, url: str, interval_seconds: Optional[int] = None, cron_expression: Optional[str] = None, webhook_url: Optional[str] = None) -> Dict`
+- `create_schedule(strategy_id: str, url: Optional[str] = None, urls: Optional[List[str]] = None, interval_seconds: Optional[int] = None, cron_expression: Optional[str] = None, webhook_url: Optional[str] = None, parameters: Optional[Dict] = None) -> Dict`
 - `list_schedules() -> List[Dict]`
-- `update_schedule(schedule_id: str, enabled: Optional[bool] = None, interval_seconds: Optional[int] = None, cron_expression: Optional[str] = None, webhook_url: Optional[str] = None) -> Dict`
+- `update_schedule(schedule_id: str, enabled: Optional[bool] = None, url: Optional[str] = None, urls: Optional[List[str]] = None, interval_seconds: Optional[int] = None, cron_expression: Optional[str] = None, webhook_url: Optional[str] = None, parameters: Optional[Dict] = None) -> Dict`
 - `delete_schedule(schedule_id: str) -> Dict`
+- `get_schedule_changes(schedule_id: str, mark_seen: bool = True, filter: Optional[str] = None) -> Dict`
 
 ### MeterError
 
@@ -630,9 +674,9 @@ All methods return dictionaries matching the API response format. See the [API d
 
 Key response fields:
 
-- **Strategy responses**: `strategy_id`, `strategy`, `preview_data`, `attempts`
-- **Job responses**: `job_id`, `status`, `results`, `item_count`, `content_hash`, `structural_signature`
-- **Schedule responses**: `id`, `strategy_id`, `url`, `schedule_type`, `interval_seconds`, `cron_expression`, `enabled`, `webhook_url`, `next_run_at`, `last_run_at`, `created_at`, `updated_at`
+- **Strategy responses**: `strategy_id`, `strategy`, `preview_data`, `attempts`, `scraper_type` ('css' or 'api'), `api_parameters` (for API strategies)
+- **Job responses**: `job_id`, `status`, `results`, `item_count`, `content_hash`, `structural_signature`, `parameters` (if API strategy)
+- **Schedule responses**: `id`, `strategy_id`, `url`, `urls`, `schedule_type`, `interval_seconds`, `cron_expression`, `enabled`, `webhook_url`, `parameters`, `next_run_at`, `last_run_at`, `created_at`, `updated_at`
 
 ## Best Practices
 
