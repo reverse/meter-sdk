@@ -1,7 +1,7 @@
 """Main client for Meter Scraper API"""
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import httpx
 
 
@@ -291,6 +291,9 @@ class MeterClient:
         interval_seconds: Optional[int] = None,
         cron_expression: Optional[str] = None,
         webhook_url: Optional[str] = None,
+        webhook_metadata: Optional[Dict[str, Any]] = None,
+        webhook_secret: Optional[str] = None,
+        webhook_type: Optional[str] = None,
         parameters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
@@ -303,12 +306,18 @@ class MeterClient:
             interval_seconds: Run every N seconds (or use cron_expression)
             cron_expression: Cron expression (e.g., "0 9 * * *")
             webhook_url: Optional webhook URL to receive scrape results
+            webhook_metadata: Custom JSON metadata included in every webhook payload
+            webhook_secret: Secret for X-Webhook-Secret header. Auto-generated
+                if not provided when webhook_url is set.
+            webhook_type: Webhook type: 'standard' or 'slack'. Auto-detected
+                from URL if not specified.
             parameters: Default API parameter overrides for all scheduled runs.
                 Only applies to API-based strategies. Keys are parameter names
                 from the strategy's api_parameters field.
 
         Returns:
-            Schedule details
+            Schedule details. If a webhook secret was auto-generated, it will be
+            included in the response (shown only once).
 
         Note:
             You must provide either url or urls, but not both.
@@ -324,6 +333,12 @@ class MeterClient:
             json_data["cron_expression"] = cron_expression
         if webhook_url:
             json_data["webhook_url"] = webhook_url
+        if webhook_metadata is not None:
+            json_data["webhook_metadata"] = webhook_metadata
+        if webhook_secret is not None:
+            json_data["webhook_secret"] = webhook_secret
+        if webhook_type is not None:
+            json_data["webhook_type"] = webhook_type
         if parameters:
             json_data["parameters"] = parameters
         return self._post("/api/schedules", json=json_data)
@@ -341,6 +356,9 @@ class MeterClient:
         interval_seconds: Optional[int] = None,
         cron_expression: Optional[str] = None,
         webhook_url: Optional[str] = None,
+        webhook_metadata: Optional[Dict[str, Any]] = None,
+        webhook_secret: Optional[str] = None,
+        webhook_type: Optional[str] = None,
         parameters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
@@ -354,6 +372,10 @@ class MeterClient:
             interval_seconds: Update interval in seconds
             cron_expression: Update cron expression
             webhook_url: Update webhook URL for scrape results
+            webhook_metadata: Update custom JSON metadata for webhook payloads
+            webhook_secret: Update webhook secret. Pass empty string "" to
+                regenerate the secret.
+            webhook_type: Update webhook type: 'standard' or 'slack'
             parameters: Update default API parameter overrides for scheduled runs.
                 Only applies to API-based strategies.
 
@@ -376,6 +398,12 @@ class MeterClient:
             json_data["cron_expression"] = cron_expression
         if webhook_url is not None:
             json_data["webhook_url"] = webhook_url
+        if webhook_metadata is not None:
+            json_data["webhook_metadata"] = webhook_metadata
+        if webhook_secret is not None:
+            json_data["webhook_secret"] = webhook_secret
+        if webhook_type is not None:
+            json_data["webhook_type"] = webhook_type
         if parameters is not None:
             json_data["parameters"] = parameters
         return self._patch(f"/api/schedules/{schedule_id}", json=json_data)
@@ -383,6 +411,24 @@ class MeterClient:
     def delete_schedule(self, schedule_id: str) -> Dict[str, Any]:
         """Delete a schedule"""
         return self._delete(f"/api/schedules/{schedule_id}")
+
+    def regenerate_webhook_secret(self, schedule_id: str) -> Dict[str, Any]:
+        """
+        Regenerate the webhook secret for a schedule.
+
+        Returns the new secret once — store it securely.
+        The secret will not be shown again in any other response.
+
+        Args:
+            schedule_id: Schedule UUID
+
+        Returns:
+            Response with schedule_id and the new webhook_secret
+
+        Raises:
+            MeterError: If schedule has no webhook URL configured
+        """
+        return self._post(f"/api/schedules/{schedule_id}/webhook-secret/regenerate")
 
     def get_schedule_changes(
         self,
@@ -414,4 +460,338 @@ class MeterClient:
         if filter:
             params["filter"] = filter
         return self._get(f"/api/schedules/{schedule_id}/changes", params=params)
+
+    # Workflow Management
+
+    def create_workflow(self, workflow: "Workflow") -> Dict[str, Any]:
+        """
+        Create a workflow from a Workflow object.
+
+        Args:
+            workflow: Workflow object defining the DAG structure
+
+        Returns:
+            Created workflow details including workflow ID
+        """
+        from .workflow import Workflow as WorkflowClass
+        if not isinstance(workflow, WorkflowClass):
+            raise MeterError("workflow must be a Workflow object")
+        return self._post("/api/workflows", json=workflow.to_dict())
+
+    def run_workflow(
+        self,
+        workflow_or_id: Union["Workflow", str],
+        force: bool = False,
+        wait: bool = True,
+        timeout: float = 3600
+    ) -> Dict[str, Any]:
+        """
+        Run a workflow. Accepts either a Workflow object or workflow_id string.
+
+        Args:
+            workflow_or_id: Workflow object (creates then runs) or workflow_id string
+            force: Force re-run, skipping change detection (default: False)
+            wait: Block until completion (default: True)
+            timeout: Maximum time to wait in seconds (default: 3600)
+
+        Returns:
+            If wait=True: Completed run with results
+            If wait=False: Run details with status 'pending' or 'running'
+
+        Example:
+            # Create and run a new workflow
+            workflow = Workflow("My Scraper")
+            index = workflow.start("index", strategy_id, urls=["https://example.com"])
+            result = client.run_workflow(workflow)
+
+            # Run an existing workflow by ID
+            result = client.run_workflow("workflow-uuid-here")
+
+            # Force re-run (skip change detection)
+            result = client.run_workflow("workflow-uuid", force=True)
+        """
+        from .workflow import Workflow as WorkflowClass
+
+        if isinstance(workflow_or_id, WorkflowClass):
+            created = self.create_workflow(workflow_or_id)
+            workflow_id = created["id"]
+        else:
+            workflow_id = workflow_or_id
+
+        run = self._post(f"/api/workflows/{workflow_id}/run", json={"force": force})
+
+        if wait:
+            return self.wait_for_workflow(workflow_id, run["id"], timeout=timeout)
+        return run
+
+    def wait_for_workflow(
+        self,
+        workflow_id: str,
+        run_id: str,
+        poll_interval: float = 5.0,
+        timeout: float = 3600
+    ) -> Dict[str, Any]:
+        """
+        Poll a workflow run until it completes.
+
+        Args:
+            workflow_id: Workflow UUID
+            run_id: Run UUID
+            poll_interval: Seconds between polls (default: 5.0)
+            timeout: Maximum time to wait in seconds (default: 3600)
+
+        Returns:
+            Completed run with results
+
+        Raises:
+            MeterError: If run fails or times out
+        """
+        start_time = time.time()
+        while True:
+            run = self.get_workflow_run(workflow_id, run_id)
+            status = run.get("status")
+
+            if status == "completed":
+                return run
+            if status == "failed":
+                error = run.get("error", "Unknown error")
+                raise MeterError(f"Workflow run failed: {error}")
+
+            if (time.time() - start_time) > timeout:
+                raise MeterError(f"Workflow run timed out after {timeout} seconds")
+
+            time.sleep(poll_interval)
+
+    def get_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get workflow details.
+
+        Args:
+            workflow_id: Workflow UUID
+
+        Returns:
+            Workflow details including nodes and edges
+        """
+        return self._get(f"/api/workflows/{workflow_id}")
+
+    def list_workflows(
+        self,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        List all workflows.
+
+        Args:
+            limit: Maximum number of workflows to return (default: 50)
+            offset: Number of workflows to skip (default: 0)
+
+        Returns:
+            List of workflow details
+        """
+        return self._get("/api/workflows", params={"limit": limit, "offset": offset})
+
+    def delete_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """
+        Delete a workflow.
+
+        Args:
+            workflow_id: Workflow UUID
+
+        Returns:
+            Deletion confirmation
+        """
+        return self._delete(f"/api/workflows/{workflow_id}")
+
+    def get_workflow_run(self, workflow_id: str, run_id: str) -> Dict[str, Any]:
+        """
+        Get run details with node executions.
+
+        Args:
+            workflow_id: Workflow UUID
+            run_id: Run UUID
+
+        Returns:
+            Run details including status, node results, and final_results
+        """
+        return self._get(f"/api/workflows/{workflow_id}/runs/{run_id}")
+
+    def list_workflow_runs(
+        self,
+        workflow_id: str,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        List run history for a workflow.
+
+        Args:
+            workflow_id: Workflow UUID
+            limit: Maximum number of runs to return (default: 20)
+            offset: Number of runs to skip (default: 0)
+
+        Returns:
+            List of run details
+        """
+        return self._get(
+            f"/api/workflows/{workflow_id}/runs",
+            params={"limit": limit, "offset": offset}
+        )
+
+    def get_workflow_output(self, workflow_id: str) -> Dict[str, Any]:
+        """
+        Get the latest completed run's results.
+
+        Args:
+            workflow_id: Workflow UUID
+
+        Returns:
+            Latest run results including final_results from all nodes
+
+        Raises:
+            MeterError: If no completed runs exist
+        """
+        return self._get(f"/api/workflows/{workflow_id}/output")
+
+    # Workflow Scheduling
+
+    def schedule_workflow(
+        self,
+        workflow_id: str,
+        interval_seconds: Optional[int] = None,
+        cron_expression: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        webhook_metadata: Optional[Dict[str, Any]] = None,
+        webhook_secret: Optional[str] = None,
+        webhook_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Schedule a workflow to run on interval or cron.
+
+        Args:
+            workflow_id: Workflow UUID
+            interval_seconds: Run every N seconds (or use cron_expression)
+            cron_expression: Cron expression (e.g., "0 9 * * *" for daily at 9am)
+            webhook_url: Optional webhook URL to receive results
+            webhook_metadata: Custom JSON metadata included in every webhook payload
+            webhook_secret: Secret for X-Webhook-Secret header
+            webhook_type: Webhook type: 'standard' or 'slack' (default: 'standard')
+
+        Returns:
+            Schedule details
+
+        Example:
+            # Run every hour
+            client.schedule_workflow(workflow_id, interval_seconds=3600)
+
+            # Run daily at 9am
+            client.schedule_workflow(workflow_id, cron_expression="0 9 * * *")
+
+            # Run hourly with webhook notification
+            client.schedule_workflow(
+                workflow_id,
+                interval_seconds=3600,
+                webhook_url="https://myapp.com/webhook"
+            )
+
+            # With metadata passed through to every webhook payload
+            client.schedule_workflow(
+                workflow_id,
+                interval_seconds=3600,
+                webhook_url="https://myapp.com/webhook",
+                webhook_metadata={"project": "my-project", "env": "prod"}
+            )
+        """
+        json_data: Dict[str, Any] = {}
+        if interval_seconds is not None:
+            json_data["interval_seconds"] = interval_seconds
+        if cron_expression is not None:
+            json_data["cron_expression"] = cron_expression
+        if webhook_url is not None:
+            json_data["webhook_url"] = webhook_url
+        if webhook_metadata is not None:
+            json_data["webhook_metadata"] = webhook_metadata
+        if webhook_secret is not None:
+            json_data["webhook_secret"] = webhook_secret
+        if webhook_type is not None:
+            json_data["webhook_type"] = webhook_type
+        return self._post(f"/api/workflows/{workflow_id}/schedules", json=json_data)
+
+    def list_workflow_schedules(self, workflow_id: str) -> List[Dict[str, Any]]:
+        """
+        List schedules for a workflow.
+
+        Args:
+            workflow_id: Workflow UUID
+
+        Returns:
+            List of schedule details
+        """
+        return self._get(f"/api/workflows/{workflow_id}/schedules")
+
+    def update_workflow_schedule(
+        self,
+        workflow_id: str,
+        schedule_id: str,
+        enabled: Optional[bool] = None,
+        interval_seconds: Optional[int] = None,
+        cron_expression: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        webhook_metadata: Optional[Dict[str, Any]] = None,
+        webhook_secret: Optional[str] = None,
+        webhook_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update a workflow schedule.
+
+        Args:
+            workflow_id: Workflow UUID
+            schedule_id: Schedule UUID
+            enabled: Enable or disable the schedule
+            interval_seconds: Update interval in seconds
+            cron_expression: Update cron expression
+            webhook_url: Update webhook URL
+            webhook_metadata: Update custom JSON metadata for webhook payloads
+            webhook_secret: Update webhook secret
+            webhook_type: Update webhook type: 'standard' or 'slack'
+
+        Returns:
+            Updated schedule details
+        """
+        json_data: Dict[str, Any] = {}
+        if enabled is not None:
+            json_data["enabled"] = enabled
+        if interval_seconds is not None:
+            json_data["interval_seconds"] = interval_seconds
+        if cron_expression is not None:
+            json_data["cron_expression"] = cron_expression
+        if webhook_url is not None:
+            json_data["webhook_url"] = webhook_url
+        if webhook_metadata is not None:
+            json_data["webhook_metadata"] = webhook_metadata
+        if webhook_secret is not None:
+            json_data["webhook_secret"] = webhook_secret
+        if webhook_type is not None:
+            json_data["webhook_type"] = webhook_type
+        return self._patch(
+            f"/api/workflows/{workflow_id}/schedules/{schedule_id}",
+            json=json_data
+        )
+
+    def delete_workflow_schedule(
+        self,
+        workflow_id: str,
+        schedule_id: str
+    ) -> Dict[str, Any]:
+        """
+        Delete a workflow schedule.
+
+        Args:
+            workflow_id: Workflow UUID
+            schedule_id: Schedule UUID
+
+        Returns:
+            Deletion confirmation
+        """
+        return self._delete(f"/api/workflows/{workflow_id}/schedules/{schedule_id}")
 
