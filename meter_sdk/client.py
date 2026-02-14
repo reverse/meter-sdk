@@ -61,6 +61,9 @@ class MeterClient:
     def _patch(self, path: str, json: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self._request("PATCH", path, json=json)
     
+    def _put(self, path: str, json: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._request("PUT", path, json=json)
+
     def _delete(self, path: str) -> Dict[str, Any]:
         return self._request("DELETE", path)
     
@@ -222,15 +225,34 @@ class MeterClient:
         self,
         strategy_id: Optional[str] = None,
         status: Optional[str] = None,
+        since: Optional[str] = None,
+        schedule_id: Optional[str] = None,
         limit: int = 20,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
-        """List jobs with optional filters"""
+        """
+        List jobs with optional filters.
+
+        Args:
+            strategy_id: Filter by strategy UUID
+            status: Filter by job status
+            since: Filter jobs since a timestamp (ISO format or relative like "24h", "7d")
+            schedule_id: Filter by schedule UUID
+            limit: Maximum number of jobs to return (default: 20)
+            offset: Number of jobs to skip (default: 0)
+
+        Returns:
+            List of job details
+        """
         params = {"limit": limit, "offset": offset}
         if strategy_id:
             params["strategy_id"] = strategy_id
         if status:
             params["status"] = status
+        if since:
+            params["since"] = since
+        if schedule_id:
+            params["schedule_id"] = schedule_id
         return self._get("/api/jobs", params=params)
     
     def compare_jobs(
@@ -243,7 +265,7 @@ class MeterClient:
     
     def get_strategy_history(self, strategy_id: str) -> List[Dict[str, Any]]:
         """Get job history for a strategy"""
-        return self._get(f"/api/strategies/{strategy_id}/history")
+        return self._get(f"/api/jobs/strategies/{strategy_id}/history")
     
     def wait_for_job(
         self,
@@ -556,6 +578,8 @@ class MeterClient:
             if status == "failed":
                 error = run.get("error", "Unknown error")
                 raise MeterError(f"Workflow run failed: {error}")
+            if status == "cancelled":
+                raise MeterError("Workflow run was cancelled")
 
             if (time.time() - start_time) > timeout:
                 raise MeterError(f"Workflow run timed out after {timeout} seconds")
@@ -591,6 +615,34 @@ class MeterClient:
         """
         return self._get("/api/workflows", params={"limit": limit, "offset": offset})
 
+    def update_workflow(
+        self,
+        workflow_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        enabled: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """
+        Update a workflow.
+
+        Args:
+            workflow_id: Workflow UUID
+            name: Update workflow name
+            description: Update workflow description
+            enabled: Enable or disable the workflow
+
+        Returns:
+            Updated workflow details
+        """
+        json_data: Dict[str, Any] = {}
+        if name is not None:
+            json_data["name"] = name
+        if description is not None:
+            json_data["description"] = description
+        if enabled is not None:
+            json_data["enabled"] = enabled
+        return self._put(f"/api/workflows/{workflow_id}", json=json_data)
+
     def delete_workflow(self, workflow_id: str) -> Dict[str, Any]:
         """
         Delete a workflow.
@@ -602,6 +654,19 @@ class MeterClient:
             Deletion confirmation
         """
         return self._delete(f"/api/workflows/{workflow_id}")
+
+    def cancel_workflow_run(self, workflow_id: str, run_id: str) -> Dict[str, Any]:
+        """
+        Cancel a running workflow run.
+
+        Args:
+            workflow_id: Workflow UUID
+            run_id: Run UUID
+
+        Returns:
+            Cancelled run details
+        """
+        return self._post(f"/api/workflows/{workflow_id}/runs/{run_id}/cancel")
 
     def get_workflow_run(self, workflow_id: str, run_id: str) -> Dict[str, Any]:
         """
@@ -638,20 +703,34 @@ class MeterClient:
             params={"limit": limit, "offset": offset}
         )
 
-    def get_workflow_output(self, workflow_id: str) -> Dict[str, Any]:
+    def get_workflow_output(
+        self,
+        workflow_id: str,
+        flat: bool = False
+    ) -> Dict[str, Any]:
         """
         Get the latest completed run's results.
 
+        By default returns results grouped by strategy within each URL,
+        with cleaned labels (e.g. "purchasing reps" instead of "script:purchasing_reps").
+
         Args:
             workflow_id: Workflow UUID
+            flat: If True, return flat per-URL results instead of grouped by strategy
 
         Returns:
-            Latest run results including final_results from all nodes
+            Latest run results. Default format:
+                final_results_by_url_grouped: {url: {strategy_label: [items]}}
+            With flat=True:
+                final_results_by_url: {url: [items]}
 
         Raises:
             MeterError: If no completed runs exist
         """
-        return self._get(f"/api/workflows/{workflow_id}/output")
+        params = {}
+        if flat:
+            params["flat"] = "true"
+        return self._get(f"/api/workflows/{workflow_id}/runs/latest/output", params=params)
 
     # Workflow Scheduling
 
