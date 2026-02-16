@@ -84,7 +84,8 @@ class MeterClient:
         url: str,
         description: str,
         name: str,
-        force_api: bool = False
+        force_api: bool = False,
+        output_schema: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Generate a new extraction strategy.
@@ -96,18 +97,23 @@ class MeterClient:
             force_api: Force API-based capture instead of CSS extraction.
                 When True, Meter will attempt to identify and capture
                 underlying API calls rather than using CSS selectors.
+            output_schema: Optional JSON schema describing the desired output
+                structure. Example: {"title": "string", "price": "number"}
 
         Returns:
             Strategy details with preview data. For API-based strategies,
             response includes scraper_type ('api' or 'css') and
             api_parameters (available URL parameters for API scrapers).
         """
-        return self._post("/api/strategies/generate", json={
+        payload = {
             "url": url,
             "description": description,
             "name": name,
             "force_api": force_api
-        })
+        }
+        if output_schema is not None:
+            payload["output_schema"] = output_schema
+        return self._post("/api/strategies/generate", json=payload)
     
     def refine_strategy(
         self,
