@@ -720,4 +720,4 @@ MIT
 
 ## Support
 
-For API documentation and interactive testing, visit [https://api.meter.sh/docs](https://api.meter.sh/docs)
+For API documentation and interactive testing, visit [https://docs.meter.sh/](https://docs.meter.sh/)
