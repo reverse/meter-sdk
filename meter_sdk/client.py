@@ -880,3 +880,277 @@ class MeterClient:
         """
         return self._delete(f"/api/workflows/{workflow_id}/schedules/{schedule_id}")
 
+    # Strategy Group Management
+
+    def create_strategy_group(
+        self,
+        name: str,
+        description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a new strategy group.
+
+        Args:
+            name: Name for the group
+            description: Optional description of the group
+
+        Returns:
+            Strategy group details including id, name, description,
+            strategy_count, created_at, and updated_at
+        """
+        json_data: Dict[str, Any] = {"name": name}
+        if description is not None:
+            json_data["description"] = description
+        return self._post("/api/strategy-groups", json=json_data)
+
+    def list_strategy_groups(
+        self,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        List all strategy groups.
+
+        Args:
+            limit: Maximum number of groups to return (default: 50)
+            offset: Number of groups to skip (default: 0)
+
+        Returns:
+            List of strategy groups with strategy counts
+        """
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        return self._get("/api/strategy-groups", params=params)
+
+    def get_strategy_group(self, group_id: str) -> Dict[str, Any]:
+        """
+        Get details for a specific strategy group including member strategies.
+
+        Args:
+            group_id: Strategy group UUID
+
+        Returns:
+            Group details with id, name, description, strategies list,
+            created_at, and updated_at
+        """
+        return self._get(f"/api/strategy-groups/{group_id}")
+
+    def update_strategy_group(
+        self,
+        group_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update a strategy group's name or description.
+
+        Args:
+            group_id: Strategy group UUID
+            name: New name for the group
+            description: New description for the group
+
+        Returns:
+            Updated strategy group details
+        """
+        json_data: Dict[str, Any] = {}
+        if name is not None:
+            json_data["name"] = name
+        if description is not None:
+            json_data["description"] = description
+        return self._patch(f"/api/strategy-groups/{group_id}", json=json_data)
+
+    def delete_strategy_group(self, group_id: str) -> Dict[str, Any]:
+        """
+        Delete a strategy group. Strategies in the group become ungrouped.
+
+        Args:
+            group_id: Strategy group UUID
+
+        Returns:
+            Deletion confirmation message
+        """
+        return self._delete(f"/api/strategy-groups/{group_id}")
+
+    def add_strategies_to_group(
+        self,
+        group_id: str,
+        strategy_ids: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Add existing strategies to a group.
+
+        Args:
+            group_id: Strategy group UUID
+            strategy_ids: List of strategy UUIDs to add
+
+        Returns:
+            Confirmation message
+        """
+        return self._post(
+            f"/api/strategy-groups/{group_id}/strategies",
+            json={"strategy_ids": strategy_ids}
+        )
+
+    def remove_strategy_from_group(
+        self,
+        group_id: str,
+        strategy_id: str
+    ) -> Dict[str, Any]:
+        """
+        Remove a strategy from a group. The strategy is not deleted,
+        just ungrouped.
+
+        Args:
+            group_id: Strategy group UUID
+            strategy_id: Strategy UUID to remove
+
+        Returns:
+            Confirmation message
+        """
+        return self._delete(
+            f"/api/strategy-groups/{group_id}/strategies/{strategy_id}"
+        )
+
+    def apply_group_schedule(
+        self,
+        group_id: str,
+        interval_seconds: Optional[int] = None,
+        cron_expression: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        webhook_secret: Optional[str] = None,
+        webhook_type: Optional[str] = None,
+        webhook_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Apply a schedule to all strategies in a group. Creates or updates
+        schedules for every member strategy.
+
+        Args:
+            group_id: Strategy group UUID
+            interval_seconds: Run every N seconds (min: 60)
+            cron_expression: Cron expression for scheduling
+            webhook_url: Webhook URL for notifications
+            webhook_secret: Webhook secret (auto-generated if not provided)
+            webhook_type: 'standard', 'slack', 'slack_workflow', or 'discord'
+                (auto-detected from URL if not specified)
+            webhook_metadata: Custom JSON metadata for webhook payloads
+
+        Returns:
+            Confirmation with created and updated schedule counts
+        """
+        json_data: Dict[str, Any] = {}
+        if interval_seconds is not None:
+            json_data["interval_seconds"] = interval_seconds
+        if cron_expression is not None:
+            json_data["cron_expression"] = cron_expression
+        if webhook_url is not None:
+            json_data["webhook_url"] = webhook_url
+        if webhook_secret is not None:
+            json_data["webhook_secret"] = webhook_secret
+        if webhook_type is not None:
+            json_data["webhook_type"] = webhook_type
+        if webhook_metadata is not None:
+            json_data["webhook_metadata"] = webhook_metadata
+        return self._post(
+            f"/api/strategy-groups/{group_id}/schedule",
+            json=json_data
+        )
+
+    def delete_group_schedules(self, group_id: str) -> Dict[str, Any]:
+        """
+        Delete all schedules for strategies in a group.
+
+        Args:
+            group_id: Strategy group UUID
+
+        Returns:
+            Confirmation message
+        """
+        return self._delete(f"/api/strategy-groups/{group_id}/schedule")
+
+    def toggle_group_schedules(
+        self,
+        group_id: str,
+        enabled: bool
+    ) -> Dict[str, Any]:
+        """
+        Enable or disable all schedules for strategies in a group.
+
+        Args:
+            group_id: Strategy group UUID
+            enabled: True to enable, False to disable
+
+        Returns:
+            Confirmation message
+        """
+        return self._patch(
+            f"/api/strategy-groups/{group_id}/schedule/toggle",
+            json={"enabled": enabled}
+        )
+
+    def apply_group_schema(
+        self,
+        group_id: str,
+        output_schema: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Apply an output schema to all strategies in a group. Triggers
+        asynchronous regeneration of strategies with the new schema.
+
+        Args:
+            group_id: Strategy group UUID
+            output_schema: JSON schema defining the desired output structure.
+                Example: {"title": "string", "price": "number"}
+
+        Returns:
+            Confirmation with strategy_count affected
+        """
+        return self._patch(
+            f"/api/strategy-groups/{group_id}/schema",
+            json={"output_schema": output_schema}
+        )
+
+    def get_schema_progress(self, group_id: str) -> Dict[str, Any]:
+        """
+        Poll the progress of a group schema regeneration task.
+
+        Args:
+            group_id: Strategy group UUID
+
+        Returns:
+            Progress details from the background task
+        """
+        return self._get(f"/api/strategy-groups/{group_id}/schema/progress")
+
+    def test_group_webhook(
+        self,
+        group_id: str,
+        webhook_url: str,
+        webhook_secret: Optional[str] = None,
+        webhook_type: Optional[str] = None,
+        webhook_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Send a test webhook using a group's configured webhook.
+
+        Args:
+            group_id: Strategy group UUID
+            webhook_url: Webhook URL to test
+            webhook_secret: Optional webhook secret
+            webhook_type: 'standard', 'slack', 'slack_workflow', or 'discord'
+            webhook_metadata: Optional custom JSON metadata
+
+        Returns:
+            Test result with success, status_code, and message
+        """
+        json_data: Dict[str, Any] = {"webhook_url": webhook_url}
+        if webhook_secret is not None:
+            json_data["webhook_secret"] = webhook_secret
+        if webhook_type is not None:
+            json_data["webhook_type"] = webhook_type
+        if webhook_metadata is not None:
+            json_data["webhook_metadata"] = webhook_metadata
+        return self._post(
+            f"/api/strategy-groups/{group_id}/webhook/test",
+            json=json_data
+        )
+
