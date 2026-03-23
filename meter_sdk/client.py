@@ -85,7 +85,10 @@ class MeterClient:
         description: str,
         name: str,
         force_api: bool = False,
-        output_schema: Optional[Dict[str, Any]] = None
+        output_schema: Optional[Dict[str, Any]] = None,
+        scraper_type: Optional[str] = None,
+        filter_config: Optional[Dict[str, Any]] = None,
+        strategy_group_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate a new extraction strategy.
@@ -99,6 +102,12 @@ class MeterClient:
                 underlying API calls rather than using CSS selectors.
             output_schema: Optional JSON schema describing the desired output
                 structure. Example: {"title": "string", "price": "number"}
+            scraper_type: Optional scraper type. Use 'content' for full-page
+                content monitoring (no LLM needed, instant). Content strategies
+                return sections: [{"heading": "...", "level": N, "content": "..."}].
+            filter_config: Optional post-extraction filter. Only items matching
+                conditions are kept.
+            strategy_group_id: Optional strategy group UUID to add this strategy to.
 
         Returns:
             Strategy details with preview data. For API-based strategies,
@@ -113,8 +122,110 @@ class MeterClient:
         }
         if output_schema is not None:
             payload["output_schema"] = output_schema
+        if scraper_type is not None:
+            payload["scraper_type"] = scraper_type
+        if filter_config is not None:
+            payload["filter_config"] = filter_config
+        if strategy_group_id is not None:
+            payload["strategy_group_id"] = strategy_group_id
         return self._post("/api/strategies/generate", json=payload)
+
+    def extract_content(
+        self,
+        url: str,
+        name: str,
+        filter_config: Optional[Dict[str, Any]] = None,
+        strategy_group_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Extract full page content for change monitoring (no LLM, instant).
+
+        Splits page content by headings into sections. Each section becomes
+        one item, enabling per-section change detection via schedules/webhooks.
+
+        Args:
+            url: URL to extract content from
+            name: Strategy name
+            filter_config: Optional post-extraction filter config
+            strategy_group_id: Optional group UUID to add this strategy to
+
+        Returns:
+            Strategy details with preview_data containing sections:
+            [{"heading": "...", "level": N, "content": "..."}]
+
+        Example:
+            strategy = client.extract_content("https://example.com/docs", "Oracle Docs")
+        """
+        return self.generate_strategy(
+            url=url,
+            description="",
+            name=name,
+            scraper_type="content",
+            filter_config=filter_config,
+            strategy_group_id=strategy_group_id,
+        )
     
+    def watch(
+        self,
+        url: str,
+        description: str,
+        webhook_url: Optional[str] = None,
+        interval_seconds: int = 3600,
+        webhook_metadata: Optional[Dict[str, Any]] = None,
+        webhook_secret: Optional[str] = None,
+        webhook_type: Optional[str] = None,
+        name: Optional[str] = None,
+        filter_config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a watch: one-step URL monitoring setup.
+
+        Combines strategy generation and schedule creation into a single call.
+        Equivalent to calling generate_strategy() then create_schedule().
+
+        Args:
+            url: URL to monitor for changes
+            description: What to extract from the page
+            webhook_url: Webhook URL for change notifications
+            interval_seconds: How often to check, in seconds (default: 3600, min: 60)
+            webhook_metadata: Custom JSON metadata included in every webhook payload
+            webhook_secret: Secret for X-Webhook-Secret header. Auto-generated
+                if not provided when webhook_url is set.
+            webhook_type: Webhook type: 'standard', 'slack', 'slack_workflow',
+                'discord', or 'email'. Auto-detected from URL if not specified.
+            name: Strategy name (auto-generated if not provided)
+            filter_config: Optional post-extraction filter config
+
+        Returns:
+            Watch details with strategy_id, schedule_id, preview_data, and next_run_at
+
+        Example:
+            watch = client.watch(
+                "https://example.com/pricing",
+                "Extract pricing tiers",
+                webhook_url="https://myapp.com/webhook",
+                interval_seconds=1800
+            )
+        """
+        json_data: Dict[str, Any] = {
+            "url": url,
+            "description": description,
+            "interval_seconds": interval_seconds,
+        }
+        if webhook_url is not None:
+            json_data["webhook_url"] = webhook_url
+        if webhook_metadata is not None:
+            json_data["webhook_metadata"] = webhook_metadata
+        if webhook_secret is not None:
+            json_data["webhook_secret"] = webhook_secret
+        if webhook_type is not None:
+            json_data["webhook_type"] = webhook_type
+        if name is not None:
+            json_data["name"] = name
+        if filter_config is not None:
+            json_data["filter_config"] = filter_config
+        return self._post("/api/watch", json=json_data)
+
     def refine_strategy(
         self,
         strategy_id: str,
@@ -149,7 +260,28 @@ class MeterClient:
     def delete_strategy(self, strategy_id: str) -> Dict[str, Any]:
         """Delete a strategy"""
         return self._delete(f"/api/strategies/{strategy_id}")
-    
+
+    def update_strategy(
+        self,
+        strategy_id: str,
+        filter_config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update a strategy.
+
+        Args:
+            strategy_id: Strategy UUID
+            filter_config: Post-extraction filter config. Only items matching
+                conditions are kept.
+
+        Returns:
+            Updated strategy details
+        """
+        json_data: Dict[str, Any] = {}
+        if filter_config is not None:
+            json_data["filter_config"] = filter_config
+        return self._patch(f"/api/strategies/{strategy_id}", json=json_data)
+
     # Job Execution
     
     def create_job(
@@ -308,7 +440,23 @@ class MeterClient:
                 raise MeterError(f"Job timed out after {timeout} seconds")
             
             time.sleep(poll_interval)
-    
+
+    def get_batch_progress(self, batch_id: str) -> Dict[str, Any]:
+        """
+        Get progress of a batch job execution.
+
+        When create_job() is called with urls= (multiple URLs), it returns
+        a batch_id. Use this method to track overall batch progress.
+
+        Args:
+            batch_id: Batch UUID returned from create_job() with multiple URLs
+
+        Returns:
+            Batch progress with total, pending, running, completed, failed
+            counts and progress_percent (0.0 to 100.0)
+        """
+        return self._get(f"/api/jobs/batch/{batch_id}")
+
     # Schedule Management
     
     def create_schedule(
@@ -337,8 +485,8 @@ class MeterClient:
             webhook_metadata: Custom JSON metadata included in every webhook payload
             webhook_secret: Secret for X-Webhook-Secret header. Auto-generated
                 if not provided when webhook_url is set.
-            webhook_type: Webhook type: 'standard' or 'slack'. Auto-detected
-                from URL if not specified.
+            webhook_type: Webhook type: 'standard', 'slack', 'slack_workflow',
+                'discord', or 'email'. Auto-detected from URL if not specified.
             parameters: Default API parameter overrides for all scheduled runs.
                 Only applies to API-based strategies. Keys are parameter names
                 from the strategy's api_parameters field.
@@ -403,7 +551,8 @@ class MeterClient:
             webhook_metadata: Update custom JSON metadata for webhook payloads
             webhook_secret: Update webhook secret. Pass empty string "" to
                 regenerate the secret.
-            webhook_type: Update webhook type: 'standard' or 'slack'
+            webhook_type: Update webhook type: 'standard', 'slack', 'slack_workflow',
+                'discord', or 'email'
             parameters: Update default API parameter overrides for scheduled runs.
                 Only applies to API-based strategies.
 
@@ -488,6 +637,42 @@ class MeterClient:
         if filter:
             params["filter"] = filter
         return self._get(f"/api/schedules/{schedule_id}/changes", params=params)
+
+    def get_schedule_changelog(
+        self,
+        schedule_id: str,
+        limit: int = 20,
+        offset: int = 0,
+        include_items: bool = True,
+        filter: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get changelog for a schedule — only runs where content changed.
+
+        Returns a feed of changes over time with new and removed items per run.
+        Unlike get_schedule_changes() which returns unseen changes (pull-based),
+        this returns the full historical changelog with pagination.
+
+        Args:
+            schedule_id: Schedule UUID
+            limit: Maximum entries to return (default: 20, max: 100)
+            offset: Number of entries to skip (default: 0)
+            include_items: Include new/removed items in response (default: True)
+            filter: Keyword filter for results (same syntax as get_schedule_changes)
+
+        Returns:
+            Changelog with entries, each containing job_id, url, completed_at,
+            item_count, new_items_count, removed_items_count, and optionally
+            new_items/removed_items lists.
+        """
+        params: Dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "include_items": include_items,
+        }
+        if filter:
+            params["filter"] = filter
+        return self._get(f"/api/schedules/{schedule_id}/changelog", params=params)
 
     # Workflow Management
 
@@ -760,7 +945,8 @@ class MeterClient:
             webhook_url: Optional webhook URL to receive results
             webhook_metadata: Custom JSON metadata included in every webhook payload
             webhook_secret: Secret for X-Webhook-Secret header
-            webhook_type: Webhook type: 'standard' or 'slack' (default: 'standard')
+            webhook_type: Webhook type: 'standard', 'slack', 'slack_workflow',
+                'discord', or 'email' (default: 'standard')
 
         Returns:
             Schedule details
@@ -838,7 +1024,8 @@ class MeterClient:
             webhook_url: Update webhook URL
             webhook_metadata: Update custom JSON metadata for webhook payloads
             webhook_secret: Update webhook secret
-            webhook_type: Update webhook type: 'standard' or 'slack'
+            webhook_type: Update webhook type: 'standard', 'slack', 'slack_workflow',
+                'discord', or 'email'
 
         Returns:
             Updated schedule details
@@ -1030,7 +1217,7 @@ class MeterClient:
             cron_expression: Cron expression for scheduling
             webhook_url: Webhook URL for notifications
             webhook_secret: Webhook secret (auto-generated if not provided)
-            webhook_type: 'standard', 'slack', 'slack_workflow', or 'discord'
+            webhook_type: 'standard', 'slack', 'slack_workflow', 'discord', or 'email'
                 (auto-detected from URL if not specified)
             webhook_metadata: Custom JSON metadata for webhook payloads
 
@@ -1136,7 +1323,7 @@ class MeterClient:
             group_id: Strategy group UUID
             webhook_url: Webhook URL to test
             webhook_secret: Optional webhook secret
-            webhook_type: 'standard', 'slack', 'slack_workflow', or 'discord'
+            webhook_type: 'standard', 'slack', 'slack_workflow', 'discord', or 'email'
             webhook_metadata: Optional custom JSON metadata
 
         Returns:
